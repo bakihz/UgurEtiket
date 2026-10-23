@@ -129,10 +129,10 @@ class ModernRobot(ttk.Window):
         right_frame = ttk.Labelframe(paned, text=" Canlı İşlem Kayıtları ", padding=5, bootstyle="secondary")
         paned.add(right_frame, weight=3)
 
-        self.txt_log = ScrolledText(right_frame, font=("Consolas", 10), state="normal", padding=10)
-        self.txt_log.pack(fill=BOTH, expand=True)
+        self.txt_log = ScrolledText(right_frame, font=("Consolas", 10), state="normal")
+        self.txt_log.pack(fill=BOTH, expand=True, padx=10, pady=10)
         # Hacker modu renkleri
-        self.txt_log.text.configure(bg="#1e1e1e", fg="#00ff00", insertbackground="white")
+        self.txt_log.configure(bg="#1e1e1e", fg="#00ff00", insertbackground="white")
 
     def setup_liste_tab(self):
         # Üst: Ekleme
@@ -205,12 +205,12 @@ class ModernRobot(ttk.Window):
 
     def log_yaz(self, msg):
         try:
-            self.txt_log.text.insert(END, msg + "\n")
-            self.txt_log.text.see(END)
+            self.txt_log.insert(END, msg + "\n")
+            self.txt_log.see(END)
         except: pass
     
     def log_temizle(self):
-        self.txt_log.text.delete('1.0', END)
+        self.txt_log.delete('1.0', END)
 
     def islem_baslat(self, func, name):
         self.btn_veri.config(state="disabled")
@@ -221,7 +221,7 @@ class ModernRobot(ttk.Window):
 
         def thread_target():
             old_stdout = sys.stdout
-            sys.stdout = RedirectText(self.txt_log.text)
+            sys.stdout = RedirectText(self.txt_log)
 
             try:
                 self.log_yaz(f"\n🚀 {name} BAŞLATILIYOR...\n" + "-"*30)
