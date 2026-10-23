@@ -7,7 +7,7 @@ import os
 import json
 import tempfile
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -181,6 +181,45 @@ def sayfadan_urunleri_cek(response):
     return sonuc
 
 
+def sayfa_adresleri_ayni(url_1, url_2):
+    """Eğik çizgi farkını yok sayarak iki sayfanın aynı adres olup olmadığını denetler."""
+    ilk = urlsplit(url_1)
+    ikinci = urlsplit(url_2)
+    return (
+        ilk.scheme.casefold(),
+        ilk.netloc.casefold(),
+        ilk.path.rstrip("/").casefold(),
+        ilk.query,
+    ) == (
+        ikinci.scheme.casefold(),
+        ikinci.netloc.casefold(),
+        ikinci.path.rstrip("/").casefold(),
+        ikinci.query,
+    )
+
+
+def urun_detayini_oku(urun_verisi):
+    """Liste sayfasındaki ürünün kendi sayfasından tam teknik özelliklerini alır."""
+    response = requests.get(
+        urun_verisi["QR Link"],
+        headers=HEADERS,
+        verify=False,
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    detaylar = sayfadan_urunleri_cek(response)
+    urun_adi = urun_verisi["Urun Adi"].casefold()
+    for detay in detaylar:
+        if detay["Urun Adi"].casefold() != urun_adi:
+            continue
+        if detay["Ozellikler"] == urun_verisi["Ozellikler"]:
+            raise ValueError("Ürün detay sayfasında teknik özellik tablosu bulunamadı.")
+        return detay
+
+    raise ValueError(f"Ürün sayfasında '{urun_verisi['Urun Adi']}' kaydı bulunamadı.")
+
+
 def csv_guvenli_kaydet(df, dosya_yolu):
     """CSV'yi önce geçici dosyaya yazar, sonra hedef dosyanın yerine alır."""
     gecici_yol = None
@@ -229,6 +268,7 @@ def veri_cek():
 
     yeni_tum_urunler = []
     basilacak_urunler = []
+    detay_hatasi_var = False
 
     print(f"🚀 {len(URUN_LINKLERI)} ürün taranıyor...\n")
 
@@ -240,6 +280,15 @@ def veri_cek():
             print(f"📦 {len(sayfa_urunleri)} ürün sayfadan okundu: {url}")
 
             for yeni_veri in sayfa_urunleri:
+                if not sayfa_adresleri_ayni(response.url, yeni_veri["QR Link"]):
+                    try:
+                        detay = urun_detayini_oku(yeni_veri)
+                        yeni_veri["Ozellikler"] = detay["Ozellikler"]
+                    except (requests.RequestException, ValueError) as e:
+                        detay_hatasi_var = True
+                        print(f"❌ Ürün özellikleri alınamadı: {yeni_veri['Urun Adi']} -> {e}")
+                        continue
+
                 ad = yeni_veri["Urun Adi"]
                 fiyat = yeni_veri["Fiyat"]
                 ozellik_metni = yeni_veri["Ozellikler"]
@@ -251,10 +300,10 @@ def veri_cek():
                     if eski_kayit["Fiyat"] != fiyat:
                         print(f"🔄 FİYAT DEĞİŞTİ: {ad} ({eski_kayit['Fiyat']} -> {fiyat})")
                         degisiklik_var = True
-                    elif eski_kayit["Ozellikler"] != ozellik_metni:
+                    if eski_kayit["Ozellikler"] != ozellik_metni:
                         print(f"📝 ÖZELLİK GÜNCELLENDİ: {ad}")
                         degisiklik_var = True
-                    else:
+                    if not degisiklik_var:
                         print(f"💤 Aynı: {ad}")
                 else:
                     print(f"✨ YENİ ÜRÜN: {ad}")
@@ -265,6 +314,10 @@ def veri_cek():
 
         except Exception as e:
             print(f"❌ Hata: {url} -> {e}")
+
+    if detay_hatasi_var:
+        print("\n❌ Bazı ürünlerin teknik özellikleri alınamadı; eksik etiket oluşturmamak için sonuçlar kaydedilmedi. Tekrar deneyin.")
+        return
 
     # Önce etiket dosyasını kaydet; bu başarısız olursa eski karşılaştırma
     # veritabanı korunur ve tarama tekrarlandığında değişiklik kaybolmaz.
