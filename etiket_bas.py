@@ -61,6 +61,12 @@ def metni_satirlara_bol(draw, text, font, max_genislik):
     satirlar.append(current_line)
     return satirlar
 
+
+def turkce_buyuk_harf(text):
+    """Türkçe i/ı harflerini doğru büyük harf karşılıklarına dönüştürür."""
+    return str(text).translate(str.maketrans({"i": "İ", "ı": "I"})).upper()
+
+
 def etiket_bas():
     if not os.path.exists(CSV_FILE):
         print("❌ CSV yok! Önce main.py çalıştır.")
@@ -90,7 +96,7 @@ def etiket_bas():
             draw = ImageDraw.Draw(img)
             
             # --- 1. ÜRÜN ADI ---
-            urun_adi = str(row['Urun Adi']).upper()
+            urun_adi = turkce_buyuk_harf(row['Urun Adi'])
             KUTU_SOL, KUTU_SAG = 1100, 1925
             KUTU_GENISLIK = KUTU_SAG - KUTU_SOL
             KUTU_MERKEZ = KUTU_SOL + (KUTU_GENISLIK / 2)
@@ -112,9 +118,30 @@ def etiket_bas():
 
             # --- 2. FİYAT ---
             fiyat_text = str(row['Fiyat'])
-            bbox = draw.textbbox((0, 0), fiyat_text, font=font_fiyat)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            draw.text((540 - (tw/2), 670 - (th/1.8)), fiyat_text, fill="black", font=font_fiyat)
+            fiyat_kutu_genisligi = 780
+            fiyat_kutu_yuksekligi = 180
+            fiyat_boyutu = 170
+            try:
+                while True:
+                    font_fiyat = ImageFont.truetype(FONT_FIYAT_DOSYASI, fiyat_boyutu)
+                    bbox = draw.textbbox((0, 0), fiyat_text, font=font_fiyat)
+                    fiyat_genisligi = bbox[2] - bbox[0]
+                    fiyat_yuksekligi = bbox[3] - bbox[1]
+                    if (
+                        fiyat_genisligi <= fiyat_kutu_genisligi
+                        and fiyat_yuksekligi <= fiyat_kutu_yuksekligi
+                    ) or fiyat_boyutu <= 60:
+                        break
+                    fiyat_boyutu -= 2
+            except OSError:
+                font_fiyat = ImageFont.load_default()
+                bbox = draw.textbbox((0, 0), fiyat_text, font=font_fiyat)
+                fiyat_genisligi = bbox[2] - bbox[0]
+                fiyat_yuksekligi = bbox[3] - bbox[1]
+
+            fiyat_x = 540 - (fiyat_genisligi / 2) - bbox[0]
+            fiyat_y = 700 - (fiyat_yuksekligi / 2) - bbox[1]
+            draw.text((fiyat_x, fiyat_y), fiyat_text, fill="black", font=font_fiyat)
 
             # --- 3. ÖZELLİKLER ---
             ozellik_listesi = row['Ozellikler'].split("|") if isinstance(row['Ozellikler'], str) else []
@@ -162,13 +189,13 @@ def etiket_bas():
                                 draw.text((x_liste, y_liste), ek_satir, fill="black", font=font_ozellik)
 
                 else:
-                    # Normal Satır
                     bolunmus_satirlar = metni_satirlara_bol(draw, oz, font_ozellik, max_metin_genisligi)
                     for satir in bolunmus_satirlar:
                         if y_liste < 1400:
                             draw.text((x_liste, y_liste), satir, fill="black", font=font_ozellik)
+                        y_liste += SATIR_YUKSEKLIGI
                 
-                # Madde bitti, bir sonraki madde için azıcık boşluk bırak
+                # Bir sonraki maddeyi son satırın altından başlat.
                 y_liste += MADDE_BOSLUGU
 
             # --- 4. QR KOD ---

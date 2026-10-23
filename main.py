@@ -5,8 +5,9 @@ import urllib3
 import re 
 import os
 import json
+import tempfile
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -102,18 +103,51 @@ def fiyati_duzenle(urun):
 def urun_ozelliklerini_oku(soup, sayfa_url, urun):
     """Ürün detay tablosunu; kategori sayfalarında ürün kısa bilgisini kullanır."""
     ozellikler = []
-    if "/urun/" in urlparse(sayfa_url).path:
-        detay = soup.select_one('[data-qa="product-detail-content"]')
-        if detay is None:
-            detay = soup.select_one("#product-detail")
-        if detay is not None:
-            for satir in detay.find_all("tr"):
+    eklenen_basliklar = set()
+
+    def ozellik_ekle(baslik, deger):
+        if not baslik or not deger:
+            return
+        anahtar = baslik.casefold().replace("ı", "i")
+        if anahtar not in eklenen_basliklar:
+            eklenen_basliklar.add(anahtar)
+            ozellikler.append(f"• {baslik}: {deger}")
+
+    detay = soup.select_one('[data-qa="product-detail-content"]')
+    if detay is None:
+        detay = soup.select_one("#product-detail")
+    if detay is not None:
+        for tablo in detay.find_all("table"):
+            for satir in tablo.find_all("tr"):
                 hucreler = satir.find_all(["th", "td"], recursive=False)
-                for i in range(0, len(hucreler) - 1, 2):
-                    baslik = hucreler[i].get_text(" ", strip=True)
-                    deger = hucreler[i + 1].get_text(" ", strip=True)
-                    if baslik and deger:
-                        ozellikler.append(f"• {baslik}: {deger}")
+                if len(hucreler) != 2:
+                    continue
+
+                hucre_degerleri = []
+                for hucre in hucreler:
+                    yapraktar = [
+                        dugum
+                        for dugum in hucre.find_all(["div", "span"])
+                        if not dugum.find(["div", "span"], recursive=False)
+                    ]
+                    metinler = [
+                        dugum.get_text(" ", strip=True)
+                        for dugum in yapraktar
+                        if dugum.get_text(" ", strip=True)
+                    ]
+                    hucre_degerleri.append(
+                        metinler if len(metinler) >= 2 else [hucre.get_text(" ", strip=True)]
+                    )
+
+                if all(len(degerler) == 1 for degerler in hucre_degerleri):
+                    baslik, deger = (degerler[0] for degerler in hucre_degerleri)
+                    ozellik_ekle(baslik, deger)
+                    continue
+
+                for degerler in hucre_degerleri:
+                    if len(degerler) >= 2:
+                        baslik, deger = degerler[0], degerler[-1]
+                        ozellik_ekle(baslik, deger)
 
     if not ozellikler:
         kisa_bilgi = str(urun.get("supplier_code") or "").strip()
@@ -145,6 +179,34 @@ def sayfadan_urunleri_cek(response):
         )
 
     return sonuc
+
+
+def csv_guvenli_kaydet(df, dosya_yolu):
+    """CSV'yi önce geçici dosyaya yazar, sonra hedef dosyanın yerine alır."""
+    gecici_yol = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            newline="",
+            dir=os.path.dirname(dosya_yolu),
+            prefix=".csv_",
+            suffix=".tmp",
+            delete=False,
+        ) as gecici_dosya:
+            gecici_yol = gecici_dosya.name
+
+        df.to_csv(gecici_yol, index=False, encoding="utf-8-sig")
+        os.replace(gecici_yol, dosya_yolu)
+    except PermissionError as e:
+        raise PermissionError(
+            f"'{dosya_yolu}' dosyasına yazılamadı. Dosya Excel'de açıksa kapatıp "
+            "tekrar deneyin; taranan sonuçlar kaybolmadı."
+        ) from e
+    finally:
+        if gecici_yol and os.path.exists(gecici_yol):
+            os.remove(gecici_yol)
+
 
 def veri_cek():
     # 0. LİNKLERİ EXCEL'DEN OKU
@@ -204,16 +266,25 @@ def veri_cek():
         except Exception as e:
             print(f"❌ Hata: {url} -> {e}")
 
-    # KAYDET
-    pd.DataFrame(yeni_tum_urunler).to_csv(VERITABANI_DOSYASI, index=False, encoding="utf-8-sig")
-    
+    # Önce etiket dosyasını kaydet; bu başarısız olursa eski karşılaştırma
+    # veritabanı korunur ve tarama tekrarlandığında değişiklik kaybolmaz.
+    try:
+        if basilacak_urunler:
+            csv_guvenli_kaydet(pd.DataFrame(basilacak_urunler), BASILACAK_DOSYA)
+        else:
+            csv_guvenli_kaydet(
+                pd.DataFrame(columns=["Urun Adi", "Fiyat", "Ozellikler", "QR Link"]),
+                BASILACAK_DOSYA,
+            )
+        csv_guvenli_kaydet(pd.DataFrame(yeni_tum_urunler), VERITABANI_DOSYASI)
+    except PermissionError as e:
+        print(f"\n❌ KAYIT HATASI: {e}")
+        return
+
     if basilacak_urunler:
-        pd.DataFrame(basilacak_urunler).to_csv(BASILACAK_DOSYA, index=False, encoding="utf-8-sig")
         print(f"\n✅ {len(basilacak_urunler)} adet etiket güncellendi. 'etiket_bas.py' çalıştırabilirsin.")
     else:
         print("\n🎉 Değişiklik yok.")
-        # Hata vermemesi için boş dosya oluştur
-        pd.DataFrame(columns=["Urun Adi", "Fiyat", "Ozellikler", "QR Link"]).to_csv(BASILACAK_DOSYA, index=False, encoding="utf-8-sig")
 
 if __name__ == "__main__":
     veri_cek()
